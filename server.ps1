@@ -1,0 +1,477 @@
+param([int]$Port = 8085, [string]$Address = 'localhost')
+
+$core = (Resolve-Path (Join-Path $PSScriptRoot '..' 'PowerBGP' 'PowerBGP.psd1')).Path
+
+Start-PodeServer {
+    Add-PodeEndpoint -Address $Address -Port $Port -Protocol Http
+    Import-PodeModule -Name Pode.Web
+    Import-PodeModule -Path $core
+
+    # REST API
+    Add-PodeRoute -Method Get -Path '/api/bgp/peers' -ScriptBlock {
+        Write-PodeJsonResponse -Value @(Get-BgpPeer)
+    }
+    Add-PodeRoute -Method Get -Path '/api/bgp/peers/:name/routes' -ScriptBlock {
+        Write-PodeJsonResponse -Value @(Get-BgpRoute -Name $WebEvent.Parameters['name'])
+    }
+    Add-PodeRoute -Method Get -Path '/api/bgp/events' -ScriptBlock {
+        Write-PodeJsonResponse -Value @(Get-BgpEvent -Last 100 | Select-Object Time, Peer, Direction, Type, Summary)
+    }
+    Add-PodeRoute -Method Get -Path '/api/bfd/sessions' -ScriptBlock {
+        Write-PodeJsonResponse -Value @(Get-BfdSession)
+    }
+    Add-PodeRoute -Method Post -Path '/api/bfd/sessions' -ScriptBlock {
+        try {
+            $d = $WebEvent.Data
+            $p = @{ RemoteAddress = [string]$d.RemoteAddress }
+            if ($d.Name) { $p.Name = [string]$d.Name }
+            if ($d.Port) { $p.Port = [int]$d.Port }
+            if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+            if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
+            if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
+            Write-PodeJsonResponse -Value (Start-BfdSession @p) -StatusCode 201
+        }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+    Add-PodeRoute -Method Post -Path '/api/bfd/sessions/:name/stop' -ScriptBlock {
+        Stop-BfdSession -Name $WebEvent.Parameters['name']
+        Set-PodeResponseStatus -Code 202
+    }
+    Add-PodeRoute -Method Post -Path '/api/bfd/sessions/:name/resume' -ScriptBlock {
+        try { Write-PodeJsonResponse -Value (Resume-BfdSession -Name $WebEvent.Parameters['name'] -ErrorAction Stop) }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+    Add-PodeRoute -Method Delete -Path '/api/bfd/sessions/:name' -ScriptBlock {
+        Remove-BfdSession -Name $WebEvent.Parameters['name'] -Confirm:$false
+        Set-PodeResponseStatus -Code 204
+    }
+    Add-PodeRoute -Method Put -Path '/api/bfd/sessions/:name' -ScriptBlock {
+        try {
+            $d = $WebEvent.Data
+            $p = @{ Name = $WebEvent.Parameters['name'] }
+            if ($d.Port) { $p.Port = [int]$d.Port }
+            if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+            if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
+            if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
+            if ($d.DetectMult) { $p.DetectMult = [int]$d.DetectMult }
+            Write-PodeJsonResponse -Value (Update-BfdSession @p)
+        }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+    Add-PodeRoute -Method Put -Path '/api/bgp/peers/:name' -ScriptBlock {
+        try {
+            $d = $WebEvent.Data
+            $p = @{ Name = $WebEvent.Parameters['name'] }
+            foreach ($k in 'RemoteAS', 'LocalAS') { if ($d.$k) { $p[$k] = [uint32]$d.$k } }
+            if ($d.RouterId) { $p.RouterId = [ipaddress]$d.RouterId }
+            if ($d.HoldTime) { $p.HoldTime = [uint16]$d.HoldTime }
+            if ($d.Port) { $p.Port = [int]$d.Port }
+            if ($null -ne $d.AutoReconnect) { $p.AutoReconnect = [bool]$d.AutoReconnect }
+            if ($d.Password) { $p.Password = [string]$d.Password }
+            Write-PodeJsonResponse -Value (Update-BgpPeer @p)
+        }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+    Add-PodeRoute -Method Post -Path '/api/bgp/peers' -ScriptBlock {
+        try {
+            $d = $WebEvent.Data
+            $p = @{ LocalAS = [uint32]$d.LocalAS; RouterId = [ipaddress]$d.RouterId }
+            foreach ($k in 'Name', 'RemoteAddress') { if ($d.$k) { $p[$k] = [string]$d.$k } }
+            if ($d.RemoteAS) { $p.RemoteAS = [uint32]$d.RemoteAS }
+            if ($d.Port) { $p.Port = [int]$d.Port }
+            if ($d.HoldTime) { $p.HoldTime = [uint16]$d.HoldTime }
+            if ($d.Passive) { $p.Passive = $true }
+            if ($d.AutoReconnect) { $p.AutoReconnect = $true }
+            if ($d.Password) { $p.Password = [string]$d.Password }
+            $peer = Start-BgpPeer @p
+            if ($d.UseBfd -and $d.RemoteAddress) {
+                $null = Start-BfdSession -RemoteAddress ([string]$d.RemoteAddress) -Name "bfd-$($peer.Name)"
+            }
+            Write-PodeJsonResponse -Value $peer -StatusCode 201
+        }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+    Add-PodeRoute -Method Delete -Path '/api/bgp/peers/:name' -ScriptBlock {
+        Remove-BgpPeer -Name $WebEvent.Parameters['name'] -Confirm:$false
+        Set-PodeResponseStatus -Code 204
+    }
+    Add-PodeRoute -Method Post -Path '/api/bgp/peers/:name/stop' -ScriptBlock {
+        Stop-BgpPeer -Name $WebEvent.Parameters['name']
+        Set-PodeResponseStatus -Code 202
+    }
+    Add-PodeRoute -Method Post -Path '/api/bgp/peers/:name/resume' -ScriptBlock {
+        try { Write-PodeJsonResponse -Value (Resume-BgpPeer -Name $WebEvent.Parameters['name'] -ErrorAction Stop) }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+    Add-PodeRoute -Method Post -Path '/api/bgp/peers/:name/update' -ScriptBlock {
+        try {
+            $d = $WebEvent.Data
+            $p = @{ Name = $WebEvent.Parameters['name'] }
+            if ($d.Nlri) { $p.Nlri = [string[]]@($d.Nlri) }
+            if ($d.Withdrawn) { $p.Withdrawn = [string[]]@($d.Withdrawn) }
+            if ($d.NextHop) { $p.NextHop = [ipaddress]$d.NextHop }
+            if ($d.AsPath) { $p.AsPath = [uint32[]]@($d.AsPath) }
+            Send-BgpUpdate @p
+            Set-PodeResponseStatus -Code 202
+        }
+        catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
+    }
+
+    Use-PodeWebTemplates -Title 'PowerBGP' -Theme Dark -Logo '/icon.png' -FavIcon '/icon.png'
+
+    Add-PodeWebPage -Name 'Peers' -Icon 'lan' -ScriptBlock {
+        New-PodeWebCard -Name 'Start peer' -Content @(
+            New-PodeWebForm -Name 'StartPeer' -ScriptBlock {
+                $d = $WebEvent.Data
+                try {
+                    $p = @{ LocalAS = [uint32]$d.LocalAS; RouterId = [ipaddress]$d.RouterId; HoldTime = [uint16]$d.HoldTime; Port = [int]$d.Port }
+                    if ($d.Name) { $p.Name = $d.Name }
+                    if ($d.RemoteAddress) { $p.RemoteAddress = $d.RemoteAddress }
+                    if ($d.RemoteAS) { $p.RemoteAS = [uint32]$d.RemoteAS }
+                    if ($d.Mode -eq 'Passive (listen)') { $p.Passive = $true }
+                    if ($d.AutoReconnect -eq 'Yes') { $p.AutoReconnect = $true }
+                    if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
+                    $null = Start-BgpPeer @p
+                    if ($d.UseBFD -eq 'Yes' -and $d.RemoteAddress) {
+                        $bn = "bfd-$(if ($d.Name) { $d.Name } else { $d.RemoteAddress })"
+                        $null = Start-BfdSession -RemoteAddress $d.RemoteAddress -Name $bn
+                    }
+                    Show-PodeWebToast -Title 'PowerBGP' -Message 'Peer started'
+                    Sync-PodeWebTable -Name 'PeerTable'
+                }
+                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+            } -Content @(
+                New-PodeWebTextbox -Name 'Name' -Placeholder 'optional, e.g. nsx-t0'
+                New-PodeWebSelect -Name 'Mode' -Options 'Active (connect)', 'Passive (listen)'
+                New-PodeWebSelect -Name 'AutoReconnect' -Options 'Yes', 'No'
+                New-PodeWebSelect -Name 'UseBFD' -Options 'No', 'Yes'
+                New-PodeWebTextbox -Name 'RemoteAddress'
+                New-PodeWebTextbox -Name 'RemoteAS' -Placeholder 'expected peer AS (optional)'
+                New-PodeWebTextbox -Name 'Password' -Type Password -ReadOnly:(-not $IsLinux) -Placeholder $(if ($IsLinux) { 'TCP-MD5 (optional)' } else { 'TCP-MD5 needs Linux; disabled on Windows' })
+                New-PodeWebTextbox -Name 'LocalAS' -Value '65001'
+                New-PodeWebTextbox -Name 'RouterId' -Value '10.0.0.99'
+                New-PodeWebTextbox -Name 'HoldTime' -Value '90'
+                New-PodeWebTextbox -Name 'Port' -Value '179'
+            )
+        )
+        if (@(Get-BgpPeer).Count) {
+        New-PodeWebCard -Name 'Edit peer (blank = unchanged; running peers restart)' -Content @(
+            New-PodeWebForm -Name 'EditPeer' -ScriptBlock {
+                $d = $WebEvent.Data
+                try {
+                    $p = @{ Name = $d.Peer }
+                    if ($d.RemoteAS) { $p.RemoteAS = [uint32]$d.RemoteAS }
+                    if ($d.LocalAS) { $p.LocalAS = [uint32]$d.LocalAS }
+                    if ($d.RouterId) { $p.RouterId = [ipaddress]$d.RouterId }
+                    if ($d.HoldTime) { $p.HoldTime = [uint16]$d.HoldTime }
+                    if ($d.Port) { $p.Port = [int]$d.Port }
+                    if ($d.AutoReconnect -in 'Yes', 'No') { $p.AutoReconnect = ($d.AutoReconnect -eq 'Yes') }
+                    if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
+                    $null = Update-BgpPeer @p
+                    Show-PodeWebToast -Title 'PowerBGP' -Message 'Peer updated'
+                    Sync-PodeWebTable -Name 'PeerTable'
+                }
+                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+            } -Content @(
+                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpPeer).Name }
+                New-PodeWebTextbox -Name 'RemoteAS'
+                New-PodeWebTextbox -Name 'LocalAS'
+                New-PodeWebTextbox -Name 'RouterId'
+                New-PodeWebTextbox -Name 'HoldTime'
+                New-PodeWebTextbox -Name 'Port'
+                New-PodeWebSelect -Name 'AutoReconnect' -Options 'Unchanged', 'Yes', 'No'
+                New-PodeWebTextbox -Name 'Password' -Type Password -ReadOnly:(-not $IsLinux) -Placeholder $(if ($IsLinux) { 'TCP-MD5 (blank = unchanged)' } else { 'TCP-MD5 needs Linux; disabled on Windows' })
+            )
+        )
+        }
+        New-PodeWebTable -Name 'PeerTable' -DisplayName 'Peers' -DataColumn Name -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Name
+            Initialize-PodeWebTableColumn -Key State
+            Initialize-PodeWebTableColumn -Key Mode
+            Initialize-PodeWebTableColumn -Key Remote
+            Initialize-PodeWebTableColumn -Key PeerAS
+            Initialize-PodeWebTableColumn -Key Uptime
+            Initialize-PodeWebTableColumn -Key Sent
+            Initialize-PodeWebTableColumn -Key Received
+            Initialize-PodeWebTableColumn -Key Learned
+            Initialize-PodeWebTableColumn -Key Advertised
+            Initialize-PodeWebTableColumn -Key LastError
+            Initialize-PodeWebTableColumn -Key Reconnects
+            Initialize-PodeWebTableColumn -Key Action
+        ) -ScriptBlock {
+            Get-BgpPeer | ForEach-Object {
+                [ordered]@{
+                    Name = $_.Name; State = $_.State; Mode = $_.Mode; Remote = $_.Remote; PeerAS = $_.PeerAS
+                    Uptime = $_.Uptime; Sent = $_.Sent; Received = $_.Received; Learned = $_.Learned
+                    Advertised = $_.Advertised; LastError = $_.LastError; Reconnects = $_.Reconnects
+                    Action = @(
+                        if ($_.State -eq 'Stopped') {
+                            New-PodeWebButton -Name 'Resume' -Icon 'play' -DataValue $_.Name -ScriptBlock {
+                                try { $null = Resume-BgpPeer -Name $WebEvent.Data.Value -ErrorAction Stop }
+                                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+                                Sync-PodeWebTable -Name 'PeerTable'
+                            }
+                        }
+                        else {
+                            New-PodeWebButton -Name 'Stop' -Icon 'stop' -DataValue $_.Name -ScriptBlock {
+                                Stop-BgpPeer -Name $WebEvent.Data.Value
+                                Sync-PodeWebTable -Name 'PeerTable'
+                            }
+                        }
+                        New-PodeWebButton -Name 'Remove' -Icon 'delete' -DataValue $_.Name -ScriptBlock {
+                            Remove-BgpPeer -Name $WebEvent.Data.Value -Confirm:$false
+                            Sync-PodeWebTable -Name 'PeerTable'
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    Add-PodeWebPage -Name 'Routes' -Icon 'routes' -ScriptBlock {
+        New-PodeWebCard -Name 'Advertise / withdraw' -Content @(
+            New-PodeWebForm -Name 'Advertise' -ScriptBlock {
+                $d = $WebEvent.Data
+                try {
+                    $split = { param($s) @($s -split '[,\s]+' | Where-Object { $_ }) }
+                    $p = @{ Name = $d.Peer }
+                    if ($d.Action -eq 'Withdraw') { $p.Withdrawn = & $split $d.Prefixes }
+                    else {
+                        $p.Nlri = & $split $d.Prefixes
+                        if ($d.NextHop) { $p.NextHop = [ipaddress]$d.NextHop }
+                        if ($d.AsPath) { $p.AsPath = [uint32[]](& $split $d.AsPath) }
+                        if ($d.Origin) { $p.Origin = $d.Origin }
+                        if ($d.LocalPref) { $p.LocalPref = [uint32]$d.LocalPref }
+                        if ($d.Med) { $p.Med = [uint32]$d.Med }
+                        if ($d.Community) { $p.Community = & $split $d.Community }
+                    }
+                    Send-BgpUpdate @p
+                    Show-PodeWebToast -Title 'PowerBGP' -Message "$($d.Action) sent"
+                    Sync-PodeWebTable -Name 'Advertised'
+                }
+                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+            } -Content @(
+                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpPeer | Where-Object State -EQ 'Established').Name }
+                New-PodeWebSelect -Name 'Action' -Options 'Advertise', 'Withdraw'
+                New-PodeWebTextbox -Name 'Prefixes' -Placeholder 'e.g. 10.10.0.0/24, 10.10.1.0/24'
+                New-PodeWebTextbox -Name 'NextHop' -Placeholder 'default: local address'
+                New-PodeWebTextbox -Name 'AsPath' -Placeholder 'default: local AS'
+                New-PodeWebSelect -Name 'Origin' -Options 'IGP', 'EGP', 'Incomplete'
+                New-PodeWebTextbox -Name 'LocalPref'
+                New-PodeWebTextbox -Name 'Med'
+                New-PodeWebTextbox -Name 'Community' -Placeholder '65000:100'
+            )
+        )
+        New-PodeWebTable -Name 'Advertised' -DisplayName 'Advertised routes' -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Peer
+            Initialize-PodeWebTableColumn -Key Prefix
+            Initialize-PodeWebTableColumn -Key NextHop
+            Initialize-PodeWebTableColumn -Key AsPath
+        ) -ScriptBlock {
+            Get-BgpRoute -Direction Advertised | ForEach-Object { [ordered]@{ Peer = $_.Peer; Prefix = $_.Prefix; NextHop = "$($_.NextHop)"; AsPath = $_.AsPath } }
+        }
+        New-PodeWebTable -Name 'Learned' -DisplayName 'Learned routes' -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Peer
+            Initialize-PodeWebTableColumn -Key Prefix
+            Initialize-PodeWebTableColumn -Key NextHop
+            Initialize-PodeWebTableColumn -Key AsPath
+            Initialize-PodeWebTableColumn -Key Origin
+            Initialize-PodeWebTableColumn -Key Med
+            Initialize-PodeWebTableColumn -Key LocalPref
+            Initialize-PodeWebTableColumn -Key Community
+        ) -ScriptBlock {
+            Get-BgpRoute -Direction Learned | ForEach-Object {
+                [ordered]@{ Peer = $_.Peer; Prefix = $_.Prefix; NextHop = "$($_.NextHop)"; AsPath = $_.AsPath; Origin = $_.Origin; Med = $_.Med; LocalPref = $_.LocalPref; Community = $_.Community }
+            }
+        }
+    }
+
+    Add-PodeWebPage -Name 'Events' -Icon 'format-list-bulleted' -ScriptBlock {
+        New-PodeWebForm -Name 'EventFilter' -SubmitText 'Apply' -ScriptBlock {
+            $on = [bool]$WebEvent.Data['Show']
+            [AppDomain]::CurrentDomain.SetData('PowerBGP.ShowKeepalives', $on)
+            Sync-PodeWebTable -Name 'EventTable'
+        } -Content @(
+            New-PodeWebCheckbox -Name 'Show' -Options 'Keepalives' -AsSwitch
+        )
+        New-PodeWebTable -Name 'EventTable' -DisplayName 'Last 100 messages' -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Time
+            Initialize-PodeWebTableColumn -Key Peer
+            Initialize-PodeWebTableColumn -Key Direction
+            Initialize-PodeWebTableColumn -Key Type
+            Initialize-PodeWebTableColumn -Key Summary
+        ) -ScriptBlock {
+            $show = [bool][AppDomain]::CurrentDomain.GetData('PowerBGP.ShowKeepalives')
+            Get-BgpEvent -Last 500 | Where-Object { $show -or $_.Type -ne 'KEEPALIVE' } | Sort-Object Time -Descending | Select-Object -First 100 | ForEach-Object {
+                [ordered]@{ Time = $_.Time.ToString('HH:mm:ss.fff'); Peer = $_.Peer; Direction = $_.Direction; Type = $_.Type; Summary = $_.Summary }
+            }
+        }
+    }
+
+    Add-PodeWebPage -Name 'BFD' -Icon 'timer-outline' -ScriptBlock {
+        New-PodeWebCard -Name 'Start BFD session' -Content @(
+            New-PodeWebForm -Name 'StartBfd' -ScriptBlock {
+                $d = $WebEvent.Data
+                try {
+                    $null = Start-BfdSession -RemoteAddress $d.RemoteAddress -Port ([int]$d.Port) -ListenPort ([int]$d.ListenPort) `
+                        -DesiredMinTxMs ([uint32]$d.TxMs) -RequiredMinRxMs ([uint32]$d.RxMs) -DetectMult ([int]$d.DetectMult)
+                    Show-PodeWebToast -Title 'PowerBGP' -Message 'BFD session started'
+                    Sync-PodeWebTable -Name 'BfdTable'
+                }
+                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+            } -Content @(
+                New-PodeWebSelect -Name 'RemoteAddress' -DisplayName 'BGP peer' -ScriptBlock {
+                    @(Get-BgpPeer | Where-Object RemoteAddress | ForEach-Object { $_.RemoteAddress } | Select-Object -Unique)
+                }
+                New-PodeWebTextbox -Name 'Port' -Value '3784'
+                New-PodeWebTextbox -Name 'ListenPort' -Value '3784'
+                New-PodeWebTextbox -Name 'TxMs' -Value '500'
+                New-PodeWebTextbox -Name 'RxMs' -Value '500'
+                New-PodeWebTextbox -Name 'DetectMult' -Value '3'
+            )
+        )
+        if (@(Get-BfdSession).Count) {
+            New-PodeWebCard -Name 'Edit BFD session (blank = unchanged; running sessions restart)' -Content @(
+                New-PodeWebForm -Name 'EditBfd' -ScriptBlock {
+                    $d = $WebEvent.Data
+                    try {
+                        $p = @{ Name = $d.Session }
+                        if ($d.Port) { $p.Port = [int]$d.Port }
+                        if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+                        if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
+                        if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
+                        if ($d.DetectMult) { $p.DetectMult = [int]$d.DetectMult }
+                        $null = Update-BfdSession @p
+                        Show-PodeWebToast -Title 'PowerBGP' -Message 'BFD session updated'
+                        Sync-PodeWebTable -Name 'BfdTable'
+                    }
+                    catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+                } -Content @(
+                    New-PodeWebSelect -Name 'Session' -ScriptBlock { @(Get-BfdSession).Name }
+                    New-PodeWebTextbox -Name 'Port'
+                    New-PodeWebTextbox -Name 'ListenPort'
+                    New-PodeWebTextbox -Name 'TxMs'
+                    New-PodeWebTextbox -Name 'RxMs'
+                    New-PodeWebTextbox -Name 'DetectMult'
+                )
+            )
+        }
+        New-PodeWebTable -Name 'BfdTable' -DisplayName 'BFD sessions' -DataColumn Name -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Name
+            Initialize-PodeWebTableColumn -Key State
+            Initialize-PodeWebTableColumn -Key RemoteState
+            Initialize-PodeWebTableColumn -Key Remote
+            Initialize-PodeWebTableColumn -Key TxMs
+            Initialize-PodeWebTableColumn -Key DetectMult
+            Initialize-PodeWebTableColumn -Key Sent
+            Initialize-PodeWebTableColumn -Key Received
+            Initialize-PodeWebTableColumn -Key Suppressed
+            Initialize-PodeWebTableColumn -Key Action
+        ) -ScriptBlock {
+            Get-BfdSession | ForEach-Object {
+                [ordered]@{
+                    Name = $_.Name; State = $_.State; RemoteState = $_.RemoteState; Remote = $_.Remote; TxMs = $_.TxMs
+                    DetectMult = $_.DetectMult; Sent = $_.Sent; Received = $_.Received; Suppressed = $_.Suppressed
+                    Action = @(
+                        if ($_.State -eq 'Stopped') {
+                            New-PodeWebButton -Name 'Resume' -Icon 'play' -DataValue $_.Name -ScriptBlock {
+                                try { $null = Resume-BfdSession -Name $WebEvent.Data.Value -ErrorAction Stop }
+                                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+                                Sync-PodeWebTable -Name 'BfdTable'
+                            }
+                        }
+                        else {
+                            New-PodeWebButton -Name 'Stop' -Icon 'stop' -DataValue $_.Name -ScriptBlock {
+                                Stop-BfdSession -Name $WebEvent.Data.Value
+                                Sync-PodeWebTable -Name 'BfdTable'
+                            }
+                        }
+                        New-PodeWebButton -Name 'Remove' -Icon 'delete' -DataValue $_.Name -ScriptBlock {
+                            Remove-BfdSession -Name $WebEvent.Data.Value -Confirm:$false
+                            Sync-PodeWebTable -Name 'BfdTable'
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    Add-PodeWebPage -Name 'Fault Injection' -Icon 'bug' -ScriptBlock {
+        New-PodeWebCard -Name 'BGP keepalives' -Content @(
+            New-PodeWebForm -Name 'Keepalives' -ScriptBlock {
+                try {
+                    Set-BgpPeer -Name $WebEvent.Data.Peer -SuppressKeepalives ($WebEvent.Data.Keepalives -eq 'Suppressed')
+                    Show-PodeWebToast -Title 'PowerBGP' -Message 'Updated'
+                }
+                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+            } -Content @(
+                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpPeer).Name }
+                New-PodeWebSelect -Name 'Keepalives' -Options 'Enabled', 'Suppressed'
+            )
+        )
+        New-PodeWebCard -Name 'BFD transmit' -Content @(
+            New-PodeWebForm -Name 'BfdSuppress' -ScriptBlock {
+                try {
+                    Set-BfdSession -Name $WebEvent.Data.Session -Suppress ($WebEvent.Data.Transmit -eq 'Suppressed')
+                    Show-PodeWebToast -Title 'PowerBGP' -Message 'Updated'
+                }
+                catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
+            } -Content @(
+                New-PodeWebSelect -Name 'Session' -ScriptBlock { @(Get-BfdSession).Name }
+                New-PodeWebSelect -Name 'Transmit' -Options 'Enabled', 'Suppressed'
+            )
+        )
+    }
+
+    Add-PodeWebPage -Name 'Packet Builder' -Icon 'hammer-wrench' -ScriptBlock {
+        New-PodeWebCard -Name 'BGP / BFD message' -Content @(
+            New-PodeWebForm -Name 'Build' -ScriptBlock {
+                $d = $WebEvent.Data
+                try {
+                    $bytes = switch ($d.Type) {
+                        'KEEPALIVE' { New-BgpKeepalive }
+                        'OPEN' { New-BgpOpen -AS ([uint32]$d.AS) -RouterId ([ipaddress]$d.RouterId) -HoldTime ([uint16]$d.HoldTime) }
+                        'NOTIFICATION (Cease)' { New-BgpNotification -Code 6 -Subcode 0 }
+                        'BFD control (Down)' { New-BfdControl -State Down }
+                        'UPDATE' {
+                            $p = @{ Nlri = @($d.Prefixes -split '[,\s]+' | Where-Object { $_ }) }
+                            if ($p.Nlri.Count) {
+                                $p.NextHop = [ipaddress]$d.NextHop
+                                $p.AsPath = @($d.AsPath -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { [uint32]$_ })
+                            }
+                            New-BgpUpdate @p
+                        }
+                    }
+                    New-PodeWebText -Value "$($bytes.Length) bytes" -Style Bold
+                    New-PodeWebCodeBlock -Value (($bytes | Format-Packet) -join "`n") -NoHighlight
+                }
+                catch { New-PodeWebAlert -Type Error -Value $_.Exception.Message }
+            } -Content @(
+                New-PodeWebSelect -Name 'Type' -Options 'OPEN', 'UPDATE', 'KEEPALIVE', 'NOTIFICATION (Cease)', 'BFD control (Down)'
+                New-PodeWebTextbox -Name 'AS' -Value '65001'
+                New-PodeWebTextbox -Name 'RouterId' -Value '10.0.0.99'
+                New-PodeWebTextbox -Name 'HoldTime' -Value '90'
+                New-PodeWebTextbox -Name 'Prefixes' -Value '10.10.0.0/24'
+                New-PodeWebTextbox -Name 'NextHop' -Value '192.168.1.99'
+                New-PodeWebTextbox -Name 'AsPath' -Value '65001'
+            )
+        )
+    }
+
+    Set-PodeWebHomePage -Layouts @(
+        New-PodeWebHero -Title 'PowerBGP' -Message 'BGP and BFD test peers, packet crafting and fault injection.'
+        New-PodeWebTimer -Name 'HomeVisibility' -Interval 3 -ScriptBlock {
+            if (@(Get-BgpPeer).Count) { Show-PodeWebComponent -Id 'HomePeersCard' } else { Hide-PodeWebComponent -Id 'HomePeersCard' }
+            if (@(Get-BfdSession).Count) { Show-PodeWebComponent -Id 'HomeBfdCard' } else { Hide-PodeWebComponent -Id 'HomeBfdCard' }
+        }
+        New-PodeWebCard -Name 'BGP peers' -Id 'HomePeersCard' -CssStyle @{ display = 'none' } -Content @(New-PodeWebTable -Name 'HomePeers' -DisplayName 'BGP peers' -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Name
+            Initialize-PodeWebTableColumn -Key State
+            Initialize-PodeWebTableColumn -Key Learned
+        ) -ScriptBlock { Get-BgpPeer | ForEach-Object { [ordered]@{ Name = $_.Name; State = $_.State; Learned = $_.Learned } } })
+        New-PodeWebCard -Name 'BFD sessions' -Id 'HomeBfdCard' -CssStyle @{ display = 'none' } -Content @(New-PodeWebTable -Name 'HomeBfd' -DisplayName 'BFD sessions' -AutoRefresh -Columns @(
+            Initialize-PodeWebTableColumn -Key Name
+            Initialize-PodeWebTableColumn -Key State
+        ) -ScriptBlock { Get-BfdSession | ForEach-Object { [ordered]@{ Name = $_.Name; State = $_.State } } })
+    )
+}
