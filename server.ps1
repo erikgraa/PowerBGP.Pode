@@ -9,7 +9,7 @@ Start-PodeServer {
 
     # REST API
     Add-PodeRoute -Method Get -Path '/api/bgp/peers' -ScriptBlock {
-        Write-PodeJsonResponse -Value @(Get-BgpPeer)
+        Write-PodeJsonResponse -Value @(Get-BgpSession)
     }
     Add-PodeRoute -Method Get -Path '/api/bgp/peers/:name/routes' -ScriptBlock {
         Write-PodeJsonResponse -Value @(Get-BgpRoute -Name $WebEvent.Parameters['name'])
@@ -68,7 +68,7 @@ Start-PodeServer {
             if ($d.Port) { $p.Port = [int]$d.Port }
             if ($null -ne $d.AutoReconnect) { $p.AutoReconnect = [bool]$d.AutoReconnect }
             if ($d.Password) { $p.Password = [string]$d.Password }
-            Write-PodeJsonResponse -Value (Update-BgpPeer @p)
+            Write-PodeJsonResponse -Value (Update-BgpSession @p)
         }
         catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
     }
@@ -83,7 +83,7 @@ Start-PodeServer {
             if ($d.Passive) { $p.Passive = $true }
             if ($d.AutoReconnect) { $p.AutoReconnect = $true }
             if ($d.Password) { $p.Password = [string]$d.Password }
-            $peer = Start-BgpPeer @p
+            $peer = Start-BgpSession @p
             if ($d.UseBfd -and $d.RemoteAddress) {
                 $null = Start-BfdSession -RemoteAddress ([string]$d.RemoteAddress) -Name "bfd-$($peer.Name)"
             }
@@ -92,15 +92,15 @@ Start-PodeServer {
         catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
     }
     Add-PodeRoute -Method Delete -Path '/api/bgp/peers/:name' -ScriptBlock {
-        Remove-BgpPeer -Name $WebEvent.Parameters['name'] -Confirm:$false
+        Remove-BgpSession -Name $WebEvent.Parameters['name'] -Confirm:$false
         Set-PodeResponseStatus -Code 204
     }
     Add-PodeRoute -Method Post -Path '/api/bgp/peers/:name/stop' -ScriptBlock {
-        Stop-BgpPeer -Name $WebEvent.Parameters['name']
+        Stop-BgpSession -Name $WebEvent.Parameters['name']
         Set-PodeResponseStatus -Code 202
     }
     Add-PodeRoute -Method Post -Path '/api/bgp/peers/:name/resume' -ScriptBlock {
-        try { Write-PodeJsonResponse -Value (Resume-BgpPeer -Name $WebEvent.Parameters['name'] -ErrorAction Stop) }
+        try { Write-PodeJsonResponse -Value (Resume-BgpSession -Name $WebEvent.Parameters['name'] -ErrorAction Stop) }
         catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
     }
     Add-PodeRoute -Method Post -Path '/api/bgp/peers/:name/update' -ScriptBlock {
@@ -131,7 +131,7 @@ Start-PodeServer {
                     if ($d.Mode -eq 'Passive (listen)') { $p.Passive = $true }
                     if ($d.AutoReconnect -eq 'Yes') { $p.AutoReconnect = $true }
                     if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
-                    $null = Start-BgpPeer @p
+                    $null = Start-BgpSession @p
                     if ($d.UseBFD -eq 'Yes' -and $d.RemoteAddress) {
                         $bn = "bfd-$(if ($d.Name) { $d.Name } else { $d.RemoteAddress })"
                         $null = Start-BfdSession -RemoteAddress $d.RemoteAddress -Name $bn
@@ -154,7 +154,7 @@ Start-PodeServer {
                 New-PodeWebTextbox -Name 'Port' -Value '179'
             )
         )
-        if (@(Get-BgpPeer).Count) {
+        if (@(Get-BgpSession).Count) {
         New-PodeWebCard -Name 'Edit peer (blank = unchanged; running peers restart)' -Content @(
             New-PodeWebForm -Name 'EditPeer' -ScriptBlock {
                 $d = $WebEvent.Data
@@ -167,13 +167,13 @@ Start-PodeServer {
                     if ($d.Port) { $p.Port = [int]$d.Port }
                     if ($d.AutoReconnect -in 'Yes', 'No') { $p.AutoReconnect = ($d.AutoReconnect -eq 'Yes') }
                     if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
-                    $null = Update-BgpPeer @p
+                    $null = Update-BgpSession @p
                     Show-PodeWebToast -Title 'PowerBGP' -Message 'Peer updated'
                     Sync-PodeWebTable -Name 'PeerTable'
                 }
                 catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
             } -Content @(
-                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpPeer).Name }
+                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpSession).Name }
                 New-PodeWebTextbox -Name 'RemoteAS'
                 New-PodeWebTextbox -Name 'LocalAS'
                 New-PodeWebTextbox -Name 'RouterId'
@@ -199,7 +199,7 @@ Start-PodeServer {
             Initialize-PodeWebTableColumn -Key Reconnects
             Initialize-PodeWebTableColumn -Key Action
         ) -ScriptBlock {
-            Get-BgpPeer | ForEach-Object {
+            Get-BgpSession | ForEach-Object {
                 [ordered]@{
                     Name = $_.Name; State = $_.State; Mode = $_.Mode; Remote = $_.Remote; PeerAS = $_.PeerAS
                     Uptime = $_.Uptime; Sent = $_.Sent; Received = $_.Received; Learned = $_.Learned
@@ -207,19 +207,19 @@ Start-PodeServer {
                     Action = @(
                         if ($_.State -eq 'Stopped') {
                             New-PodeWebButton -Name 'Resume' -Icon 'play' -DataValue $_.Name -ScriptBlock {
-                                try { $null = Resume-BgpPeer -Name $WebEvent.Data.Value -ErrorAction Stop }
+                                try { $null = Resume-BgpSession -Name $WebEvent.Data.Value -ErrorAction Stop }
                                 catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
                                 Sync-PodeWebTable -Name 'PeerTable'
                             }
                         }
                         else {
                             New-PodeWebButton -Name 'Stop' -Icon 'stop' -DataValue $_.Name -ScriptBlock {
-                                Stop-BgpPeer -Name $WebEvent.Data.Value
+                                Stop-BgpSession -Name $WebEvent.Data.Value
                                 Sync-PodeWebTable -Name 'PeerTable'
                             }
                         }
                         New-PodeWebButton -Name 'Remove' -Icon 'delete' -DataValue $_.Name -ScriptBlock {
-                            Remove-BgpPeer -Name $WebEvent.Data.Value -Confirm:$false
+                            Remove-BgpSession -Name $WebEvent.Data.Value -Confirm:$false
                             Sync-PodeWebTable -Name 'PeerTable'
                         }
                     )
@@ -251,7 +251,7 @@ Start-PodeServer {
                 }
                 catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
             } -Content @(
-                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpPeer | Where-Object State -EQ 'Established').Name }
+                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpSession | Where-Object State -EQ 'Established').Name }
                 New-PodeWebSelect -Name 'Action' -Options 'Advertise', 'Withdraw'
                 New-PodeWebTextbox -Name 'Prefixes' -Placeholder 'e.g. 10.10.0.0/24, 10.10.1.0/24'
                 New-PodeWebTextbox -Name 'NextHop' -Placeholder 'default: local address'
@@ -321,7 +321,7 @@ Start-PodeServer {
                 catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
             } -Content @(
                 New-PodeWebSelect -Name 'RemoteAddress' -DisplayName 'BGP peer' -ScriptBlock {
-                    @(Get-BgpPeer | Where-Object RemoteAddress | ForEach-Object { $_.RemoteAddress } | Select-Object -Unique)
+                    @(Get-BgpSession | Where-Object RemoteAddress | ForEach-Object { $_.RemoteAddress } | Select-Object -Unique)
                 }
                 New-PodeWebTextbox -Name 'Port' -Value '3784'
                 New-PodeWebTextbox -Name 'ListenPort' -Value '3784'
@@ -400,12 +400,12 @@ Start-PodeServer {
         New-PodeWebCard -Name 'BGP keepalives' -Content @(
             New-PodeWebForm -Name 'Keepalives' -ScriptBlock {
                 try {
-                    Set-BgpPeer -Name $WebEvent.Data.Peer -SuppressKeepalives ($WebEvent.Data.Keepalives -eq 'Suppressed')
+                    Set-BgpSession -Name $WebEvent.Data.Peer -SuppressKeepalives ($WebEvent.Data.Keepalives -eq 'Suppressed')
                     Show-PodeWebToast -Title 'PowerBGP' -Message 'Updated'
                 }
                 catch { Show-PodeWebToast -Title 'Error' -Message $_.Exception.Message -Icon 'alert' }
             } -Content @(
-                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpPeer).Name }
+                New-PodeWebSelect -Name 'Peer' -ScriptBlock { @(Get-BgpSession).Name }
                 New-PodeWebSelect -Name 'Keepalives' -Options 'Enabled', 'Suppressed'
             )
         )
@@ -461,14 +461,14 @@ Start-PodeServer {
     Set-PodeWebHomePage -Layouts @(
         New-PodeWebHero -Title 'PowerBGP' -Message 'BGP and BFD test peers, packet crafting and fault injection.'
         New-PodeWebTimer -Name 'HomeVisibility' -Interval 3 -ScriptBlock {
-            if (@(Get-BgpPeer).Count) { Show-PodeWebComponent -Id 'HomePeersCard' } else { Hide-PodeWebComponent -Id 'HomePeersCard' }
+            if (@(Get-BgpSession).Count) { Show-PodeWebComponent -Id 'HomePeersCard' } else { Hide-PodeWebComponent -Id 'HomePeersCard' }
             if (@(Get-BfdSession).Count) { Show-PodeWebComponent -Id 'HomeBfdCard' } else { Hide-PodeWebComponent -Id 'HomeBfdCard' }
         }
         New-PodeWebCard -Name 'BGP peers' -Id 'HomePeersCard' -CssStyle @{ display = 'none' } -Content @(New-PodeWebTable -Name 'HomePeers' -DisplayName 'BGP peers' -AutoRefresh -Columns @(
             Initialize-PodeWebTableColumn -Key Name
             Initialize-PodeWebTableColumn -Key State
             Initialize-PodeWebTableColumn -Key Learned
-        ) -ScriptBlock { Get-BgpPeer | ForEach-Object { [ordered]@{ Name = $_.Name; State = $_.State; Learned = $_.Learned } } })
+        ) -ScriptBlock { Get-BgpSession | ForEach-Object { [ordered]@{ Name = $_.Name; State = $_.State; Learned = $_.Learned } } })
         New-PodeWebCard -Name 'BFD sessions' -Id 'HomeBfdCard' -CssStyle @{ display = 'none' } -Content @(New-PodeWebTable -Name 'HomeBfd' -DisplayName 'BFD sessions' -AutoRefresh -Columns @(
             Initialize-PodeWebTableColumn -Key Name
             Initialize-PodeWebTableColumn -Key State
