@@ -3,7 +3,9 @@ RUN pwsh -NoProfile -Command "Set-PSRepository PSGallery -InstallationPolicy Tru
 WORKDIR /app
 COPY PowerBGP ./PowerBGP
 COPY PowerBGP.Pode ./PowerBGP.Pode
-# TCP-MD5 works without extra capabilities. Use host networking to reach lab devices:
-#   docker run --rm --network host powerbgp
+# Use host networking to reach lab devices:
+#   podman run --rm --network host powerbgp
+# TCP-MD5 sessions started in a rootful container without extra capabilities (tested with Podman).
+# If your runtime restricts it, add --cap-add NET_ADMIN.
 EXPOSE 8085
 CMD ["pwsh", "-NoProfile", "-File", "/app/PowerBGP.Pode/server.ps1", "-Address", "0.0.0.0"]
