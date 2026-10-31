@@ -36,6 +36,8 @@ Start-PodeServer {
             if ($d.Name) { $p.Name = [string]$d.Name }
             if ($d.Port) { $p.Port = [int]$d.Port }
             if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+            if ($d.LocalAddress) { $p.LocalAddress = [ipaddress][string]$d.LocalAddress }
+            if ($d.MultiHop -eq $true) { $p.MultiHop = $true }
             if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
             if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
             Write-PodeJsonResponse -Value (Start-BfdSession @p) -StatusCode 201
@@ -60,6 +62,7 @@ Start-PodeServer {
             $p = @{ Name = $WebEvent.Parameters['name'] }
             if ($d.Port) { $p.Port = [int]$d.Port }
             if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+            if ($d.LocalAddress) { $p.LocalAddress = [ipaddress][string]$d.LocalAddress }
             if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
             if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
             if ($d.DetectMult) { $p.DetectMult = [int]$d.DetectMult }
@@ -212,8 +215,9 @@ Start-PodeServer {
             (& $str 'Type' 'OPEN, UPDATE, NOTIFICATION or KEEPALIVE')
             (& $str 'Summary' 'Decoded summary')))
     $bfdSettings = @(
-        (& $int 'Port' 'Remote BFD port (default 3784)')
+        (& $int 'Port' 'Remote BFD port (default 3784, or 4784 with MultiHop)')
         (& $int 'ListenPort' 'Local listen port')
+        (& $str 'LocalAddress' 'Local source/bind address')
         (& $int 'TxMs' 'Desired min TX interval in ms')
         (& $int 'RxMs' 'Required min RX interval in ms'))
     Add-PodeOAComponentSchema -Name 'BfdSession' -Component (New-PodeOAObjectProperty -Properties @(
@@ -221,7 +225,7 @@ Start-PodeServer {
             (& $str 'State' 'Local state')
             (& $str 'RemoteState' 'State the peer reports')
             (& $str 'Remote' 'Remote endpoint')
-            (& $int 'TxMs' 'TX interval in ms')
+            (& $str 'LocalAddress' 'Local bind address, if set')
             (& $int 'RxMs' 'RX interval in ms')
             (& $int 'DetectMult' 'Detect multiplier')
             (& $int 'Sent' 'Packets sent')
@@ -230,7 +234,8 @@ Start-PodeServer {
             (& $str 'LastError' 'Last error, if any')))
     Add-PodeOAComponentSchema -Name 'BfdCreate' -Component (New-PodeOAObjectProperty -Properties (@(
                 (& $str 'Name' 'Session name')
-                (New-PodeOAStringProperty -Name 'RemoteAddress' -Required)) + $bfdSettings))
+                (New-PodeOAStringProperty -Name 'RemoteAddress' -Required)
+                (& $bool 'MultiHop' 'Use multihop BFD (RFC 5883, UDP 4784)')) + $bfdSettings))
     Add-PodeOAComponentSchema -Name 'BfdUpdate' -Component (New-PodeOAObjectProperty -Properties ($bfdSettings + (& $int 'DetectMult' 'Detect multiplier')))
 
     $nameParam = New-PodeOAStringProperty -Name 'name' -Description 'Session name' -Required | ConvertTo-PodeOAParameter -In Path
@@ -472,8 +477,12 @@ Start-PodeServer {
             New-PodeWebForm -Name 'StartBfd' -ScriptBlock {
                 $d = $WebEvent.Data
                 try {
-                    $null = Start-BfdSession -RemoteAddress $d.RemoteAddress -Port ([int]$d.Port) -ListenPort ([int]$d.ListenPort) `
-                        -DesiredMinTxMs ([uint32]$d.TxMs) -RequiredMinRxMs ([uint32]$d.RxMs) -DetectMult ([int]$d.DetectMult)
+                    $p = @{ RemoteAddress = $d.RemoteAddress; DesiredMinTxMs = [uint32]$d.TxMs; RequiredMinRxMs = [uint32]$d.RxMs; DetectMult = [int]$d.DetectMult }
+                    if ($d.Port) { $p.Port = [int]$d.Port }
+                    if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+                    if ($d.LocalAddress) { $p.LocalAddress = [ipaddress]$d.LocalAddress }
+                    if ($d.MultiHop -eq 'Yes') { $p.MultiHop = $true }
+                    $null = Start-BfdSession @p
                     Show-PodeWebToast -Title 'PowerBGP' -Message 'BFD session started'
                     Sync-PodeWebTable -Name 'BfdTable'
                 }
@@ -482,8 +491,10 @@ Start-PodeServer {
                 New-PodeWebSelect -Name 'RemoteAddress' -DisplayName 'BGP peer' -ScriptBlock {
                     @(Get-BgpSession | Where-Object RemoteAddress | ForEach-Object { $_.RemoteAddress } | Select-Object -Unique)
                 }
-                New-PodeWebTextbox -Name 'Port' -Value '3784'
-                New-PodeWebTextbox -Name 'ListenPort' -Value '3784'
+                New-PodeWebSelect -Name 'MultiHop' -DisplayName 'Multihop (UDP 4784)' -Options 'No', 'Yes'
+                New-PodeWebTextbox -Name 'LocalAddress' -DisplayName 'Local address (optional)'
+                New-PodeWebTextbox -Name 'Port' -DisplayName 'Remote port (blank = 3784, or 4784 multihop)'
+                New-PodeWebTextbox -Name 'ListenPort' -DisplayName 'Listen port (blank = same default)'
                 New-PodeWebTextbox -Name 'TxMs' -Value '500'
                 New-PodeWebTextbox -Name 'RxMs' -Value '500'
                 New-PodeWebTextbox -Name 'DetectMult' -Value '3'
@@ -497,6 +508,7 @@ Start-PodeServer {
                         $p = @{ Name = $d.Session }
                         if ($d.Port) { $p.Port = [int]$d.Port }
                         if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
+                        if ($d.LocalAddress) { $p.LocalAddress = [ipaddress]$d.LocalAddress }
                         if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
                         if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
                         if ($d.DetectMult) { $p.DetectMult = [int]$d.DetectMult }
@@ -509,6 +521,7 @@ Start-PodeServer {
                     New-PodeWebSelect -Name 'Session' -ScriptBlock { @(Get-BfdSession).Name }
                     New-PodeWebTextbox -Name 'Port'
                     New-PodeWebTextbox -Name 'ListenPort'
+                    New-PodeWebTextbox -Name 'LocalAddress'
                     New-PodeWebTextbox -Name 'TxMs'
                     New-PodeWebTextbox -Name 'RxMs'
                     New-PodeWebTextbox -Name 'DetectMult'
