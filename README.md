@@ -9,6 +9,10 @@ pwsh ./server.ps1            # http://localhost:8085
 pwsh ./server.ps1 -Address 0.0.0.0
 ```
 
+## REST API and OpenAPI
+
+The REST API lives under `/api/bgp/*` and `/api/bfd/*`. The OpenAPI 3.0 spec is served at `/docs/openapi`, with Swagger UI at `/docs/swagger` and ReDoc at `/docs/redoc`. Peer create/edit accept `LocalAddress`, `AddressFamily`, `InboundFilter` and `InboundDefault`. There is no authentication, so use it in a lab only.
+
 ## Docker (Linux, enables TCP-MD5)
 
 From the parent folder containing both repos:
