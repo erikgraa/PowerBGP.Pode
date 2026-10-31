@@ -80,6 +80,8 @@ Start-PodeServer {
             if ($d.Port) { $p.Port = [int]$d.Port }
             if ($null -ne $d.AutoReconnect) { $p.AutoReconnect = [bool]$d.AutoReconnect }
             if ($d.Password) { $p.Password = [string]$d.Password }
+            if ($null -ne $d.GracefulRestart) { $p.GracefulRestart = [bool]$d.GracefulRestart }
+            if ($null -ne $d.RestartTime) { $p.RestartTime = [int]$d.RestartTime }
             if ($d.LocalAddress) { $p.LocalAddress = [string]$d.LocalAddress }
             if ($d.AddressFamily) { $p.AddressFamily = [string[]]@($d.AddressFamily) }
             if ($d.InboundFilter) { $p.InboundFilter = @($d.InboundFilter) }
@@ -97,6 +99,8 @@ Start-PodeServer {
             if ($d.Port) { $p.Port = [int]$d.Port }
             if ($d.HoldTime) { $p.HoldTime = [uint16]$d.HoldTime }
             if ($d.Passive) { $p.Passive = $true }
+            if ($d.GracefulRestart) { $p.GracefulRestart = $true }
+            if ($null -ne $d.RestartTime) { $p.RestartTime = [int]$d.RestartTime }
             if ($null -ne $d.AutoReconnect) { $p.AutoReconnect = [bool]$d.AutoReconnect }
             if ($d.Password) { $p.Password = [string]$d.Password }
             if ($d.LocalAddress) { $p.LocalAddress = [ipaddress]$d.LocalAddress }
@@ -171,6 +175,11 @@ Start-PodeServer {
             (& $int 'Advertised' 'Routes we advertise')
             (& $bool 'KeepalivesPaused' 'Fault injection: keepalives suppressed')
             (& $bool 'AutoReconnect' 'Reconnect after the session drops')
+            (& $bool 'GracefulRestart' 'We advertise the Graceful Restart capability (RFC 4724)')
+            (& $int 'RestartTime' 'Restart time we advertise, in seconds')
+            (& $bool 'PeerGracefulRestart' 'Peer advertised Graceful Restart')
+            (& $int 'PeerRestartTime' 'Restart time the peer advertised')
+            (& $int 'StaleRoutes' 'Learned routes kept as stale during a peer restart')
             (& $bool 'Md5' 'TCP-MD5 password configured')
             (& $int 'Reconnects' 'Reconnect attempts')
             (& $str 'NextRetry' 'Time of the next reconnect attempt')
@@ -182,6 +191,8 @@ Start-PodeServer {
         (& $int 'HoldTime' 'Hold time in seconds')
         (& $int 'Port' 'TCP port (default 179)')
         (& $bool 'AutoReconnect' 'Reconnect after the session drops (default true)')
+        (& $bool 'GracefulRestart' 'Advertise the Graceful Restart capability (RFC 4724) and keep a restarting peer''s routes as stale')
+        (& $int 'RestartTime' 'Restart time to advertise, 0-4095 seconds (default 120)')
         (& $str 'Password' 'TCP-MD5 password (Linux only)')
         (& $str 'LocalAddress' 'Bind to this source address')
         (New-PodeOAStringProperty -Name 'AddressFamily' -Enum 'IPv4', 'IPv6' -Array -Description 'Address families to advertise (default IPv4)')
@@ -294,6 +305,7 @@ Start-PodeServer {
                     if ($d.RemoteAS) { $p.RemoteAS = [uint32]$d.RemoteAS }
                     if ($d.Mode -eq 'Passive (listen)') { $p.Passive = $true }
                     if ($d.AutoReconnect -eq 'No') { $p.AutoReconnect = $false }
+                    if ($d.GracefulRestart -eq 'Yes') { $p.GracefulRestart = $true }
                     if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
                     $null = Start-BgpSession @p
                     if ($d.UseBFD -eq 'Yes' -and $d.RemoteAddress) {
@@ -308,6 +320,7 @@ Start-PodeServer {
                 New-PodeWebTextbox -Name 'Name' -Placeholder 'optional, e.g. nsx-t0'
                 New-PodeWebSelect -Name 'Mode' -Options 'Active (connect)', 'Passive (listen)'
                 New-PodeWebSelect -Name 'AutoReconnect' -Options 'Yes', 'No'
+                New-PodeWebSelect -Name 'GracefulRestart' -Options 'No', 'Yes'
                 New-PodeWebSelect -Name 'UseBFD' -Options 'No', 'Yes'
                 New-PodeWebTextbox -Name 'RemoteAddress'
                 New-PodeWebTextbox -Name 'RemoteAS' -Placeholder 'expected peer AS (optional)'
@@ -330,6 +343,7 @@ Start-PodeServer {
                     if ($d.HoldTime) { $p.HoldTime = [uint16]$d.HoldTime }
                     if ($d.Port) { $p.Port = [int]$d.Port }
                     if ($d.AutoReconnect -in 'Yes', 'No') { $p.AutoReconnect = ($d.AutoReconnect -eq 'Yes') }
+                    if ($d.GracefulRestart -in 'Yes', 'No') { $p.GracefulRestart = ($d.GracefulRestart -eq 'Yes') }
                     if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
                     $null = Update-BgpSession @p
                     Show-PodeWebToast -Title 'PowerBGP' -Message 'Peer updated'
@@ -344,6 +358,7 @@ Start-PodeServer {
                 New-PodeWebTextbox -Name 'HoldTime'
                 New-PodeWebTextbox -Name 'Port'
                 New-PodeWebSelect -Name 'AutoReconnect' -Options 'Unchanged', 'Yes', 'No'
+                New-PodeWebSelect -Name 'GracefulRestart' -Options 'Unchanged', 'Yes', 'No'
                 New-PodeWebTextbox -Name 'Password' -Type Password -ReadOnly:(-not $IsLinux) -Placeholder $(if ($IsLinux) { 'TCP-MD5 (blank = unchanged)' } else { 'TCP-MD5 needs Linux; disabled on Windows' })
             )
         )
