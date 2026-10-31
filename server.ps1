@@ -97,7 +97,7 @@ Start-PodeServer {
             if ($d.Port) { $p.Port = [int]$d.Port }
             if ($d.HoldTime) { $p.HoldTime = [uint16]$d.HoldTime }
             if ($d.Passive) { $p.Passive = $true }
-            if ($d.AutoReconnect) { $p.AutoReconnect = $true }
+            if ($null -ne $d.AutoReconnect) { $p.AutoReconnect = [bool]$d.AutoReconnect }
             if ($d.Password) { $p.Password = [string]$d.Password }
             if ($d.LocalAddress) { $p.LocalAddress = [ipaddress]$d.LocalAddress }
             if ($d.AddressFamily) { $p.AddressFamily = [string[]]@($d.AddressFamily) }
@@ -181,7 +181,7 @@ Start-PodeServer {
         (& $str 'RouterId' 'Local BGP identifier (IPv4 format)')
         (& $int 'HoldTime' 'Hold time in seconds')
         (& $int 'Port' 'TCP port (default 179)')
-        (& $bool 'AutoReconnect' 'Reconnect after the session drops')
+        (& $bool 'AutoReconnect' 'Reconnect after the session drops (default true)')
         (& $str 'Password' 'TCP-MD5 password (Linux only)')
         (& $str 'LocalAddress' 'Bind to this source address')
         (New-PodeOAStringProperty -Name 'AddressFamily' -Enum 'IPv4', 'IPv6' -Array -Description 'Address families to advertise (default IPv4)')
@@ -293,7 +293,7 @@ Start-PodeServer {
                     if ($d.RemoteAddress) { $p.RemoteAddress = $d.RemoteAddress }
                     if ($d.RemoteAS) { $p.RemoteAS = [uint32]$d.RemoteAS }
                     if ($d.Mode -eq 'Passive (listen)') { $p.Passive = $true }
-                    if ($d.AutoReconnect -eq 'Yes') { $p.AutoReconnect = $true }
+                    if ($d.AutoReconnect -eq 'No') { $p.AutoReconnect = $false }
                     if ($d.Password -and $IsLinux) { $p.Password = $d.Password }
                     $null = Start-BgpSession @p
                     if ($d.UseBFD -eq 'Yes' -and $d.RemoteAddress) {
