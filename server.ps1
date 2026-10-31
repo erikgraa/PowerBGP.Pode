@@ -8,7 +8,7 @@ Start-PodeServer {
     Import-PodeModule -Path $core
 
     Enable-PodeOpenApi -Path '/docs/openapi' -OpenApiVersion '3.0.3' -DisableMinimalDefinitions -NoDefaultResponses
-    Add-PodeOAInfo -Title 'PowerBGP API' -Version '0.5.0' -Description 'REST API for the PowerBGP test peers (BGP and BFD). Lab use only: there is no authentication.' -LicenseName 'MIT' -LicenseUrl 'https://opensource.org/license/mit'
+    Add-PodeOAInfo -Title 'PowerBGP API' -Version '0.8.0' -Description 'REST API for the PowerBGP test peers (BGP and BFD). Lab use only: there is no authentication.' -LicenseName 'MIT' -LicenseUrl 'https://opensource.org/license/mit'
     Enable-PodeOpenApiViewer -Type Swagger -Path '/docs/swagger' -DarkMode
     Enable-PodeOpenApiViewer -Type ReDoc -Path '/docs/redoc' -DarkMode
 
@@ -40,6 +40,7 @@ Start-PodeServer {
             if ($d.MultiHop -eq $true) { $p.MultiHop = $true }
             if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
             if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
+            if ($d.AuthType) { $p.AuthType = [string]$d.AuthType; $p.AuthKeyId = if ($null -ne $d.AuthKeyId) { [int]$d.AuthKeyId } else { 1 }; if ($d.AuthKey) { $p.AuthKey = [string]$d.AuthKey } }
             Write-PodeJsonResponse -Value (Start-BfdSession @p) -StatusCode 201
         }
         catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
@@ -66,6 +67,9 @@ Start-PodeServer {
             if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
             if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
             if ($d.DetectMult) { $p.DetectMult = [int]$d.DetectMult }
+            if ($d.AuthType) { $p.AuthType = [string]$d.AuthType }
+            if ($null -ne $d.AuthKeyId) { $p.AuthKeyId = [int]$d.AuthKeyId }
+            if ($d.AuthKey) { $p.AuthKey = [string]$d.AuthKey }
             Write-PodeJsonResponse -Value (Update-BfdSession @p)
         }
         catch { Write-PodeJsonResponse -Value @{ error = $_.Exception.Message } -StatusCode 400 }
@@ -230,7 +234,10 @@ Start-PodeServer {
         (& $int 'ListenPort' 'Local listen port')
         (& $str 'LocalAddress' 'Local source/bind address')
         (& $int 'TxMs' 'Desired min TX interval in ms')
-        (& $int 'RxMs' 'Required min RX interval in ms'))
+        (& $int 'RxMs' 'Required min RX interval in ms')
+        (New-PodeOAStringProperty -Name 'AuthType' -Description 'None, SimplePassword or KeyedSHA1 (RFC 5880 6.7)' -Enum 'None','SimplePassword','KeyedSHA1')
+        (& $int 'AuthKeyId' 'Authentication key ID (0-255)')
+        (& $str 'AuthKey' 'Authentication key or password (write-only)'))
     Add-PodeOAComponentSchema -Name 'BfdSession' -Component (New-PodeOAObjectProperty -Properties @(
             (& $str 'Name' 'Session name')
             (& $str 'State' 'Local state')
@@ -239,6 +246,8 @@ Start-PodeServer {
             (& $str 'LocalAddress' 'Local bind address, if set')
             (& $int 'RxMs' 'RX interval in ms')
             (& $int 'DetectMult' 'Detect multiplier')
+            (& $str 'AuthType' 'Authentication type')
+            (& $int 'AuthFailures' 'Packets dropped for failed authentication')
             (& $int 'Sent' 'Packets sent')
             (& $int 'Received' 'Packets received')
             (& $bool 'Suppressed' 'Fault injection: silent')
@@ -497,6 +506,7 @@ Start-PodeServer {
                     if ($d.ListenPort) { $p.ListenPort = [int]$d.ListenPort }
                     if ($d.LocalAddress) { $p.LocalAddress = [ipaddress]$d.LocalAddress }
                     if ($d.MultiHop -eq 'Yes') { $p.MultiHop = $true }
+                    if ($d.AuthType -and $d.AuthType -ne 'None') { $p.AuthType = $d.AuthType; $p.AuthKey = $d.AuthKey; if ($d.AuthKeyId) { $p.AuthKeyId = [int]$d.AuthKeyId } }
                     $null = Start-BfdSession @p
                     Show-PodeWebToast -Title 'PowerBGP' -Message 'BFD session started'
                     Sync-PodeWebTable -Name 'BfdTable'
@@ -513,6 +523,9 @@ Start-PodeServer {
                 New-PodeWebTextbox -Name 'TxMs' -Value '500'
                 New-PodeWebTextbox -Name 'RxMs' -Value '500'
                 New-PodeWebTextbox -Name 'DetectMult' -Value '3'
+                New-PodeWebSelect -Name 'AuthType' -DisplayName 'Authentication' -Options 'None', 'SimplePassword', 'KeyedSHA1'
+                New-PodeWebTextbox -Name 'AuthKeyId' -DisplayName 'Auth key ID' -Value '1'
+                New-PodeWebTextbox -Name 'AuthKey' -DisplayName 'Auth key / password' -Type Password
             )
         )
         if (@(Get-BfdSession).Count) {
@@ -527,6 +540,7 @@ Start-PodeServer {
                         if ($d.TxMs) { $p.DesiredMinTxMs = [uint32]$d.TxMs }
                         if ($d.RxMs) { $p.RequiredMinRxMs = [uint32]$d.RxMs }
                         if ($d.DetectMult) { $p.DetectMult = [int]$d.DetectMult }
+                        if ($d.AuthType) { $p.AuthType = $d.AuthType; if ($d.AuthKey) { $p.AuthKey = $d.AuthKey }; if ($d.AuthKeyId) { $p.AuthKeyId = [int]$d.AuthKeyId } }
                         $null = Update-BfdSession @p
                         Show-PodeWebToast -Title 'PowerBGP' -Message 'BFD session updated'
                         Sync-PodeWebTable -Name 'BfdTable'
@@ -540,6 +554,9 @@ Start-PodeServer {
                     New-PodeWebTextbox -Name 'TxMs'
                     New-PodeWebTextbox -Name 'RxMs'
                     New-PodeWebTextbox -Name 'DetectMult'
+                    New-PodeWebSelect -Name 'AuthType' -DisplayName 'Authentication (blank = unchanged)' -Options '', 'None', 'SimplePassword', 'KeyedSHA1'
+                    New-PodeWebTextbox -Name 'AuthKeyId' -DisplayName 'Auth key ID'
+                    New-PodeWebTextbox -Name 'AuthKey' -DisplayName 'Auth key / password' -Type Password
                 )
             )
         }
@@ -552,13 +569,14 @@ Start-PodeServer {
             Initialize-PodeWebTableColumn -Key DetectMult
             Initialize-PodeWebTableColumn -Key Sent
             Initialize-PodeWebTableColumn -Key Received
+            Initialize-PodeWebTableColumn -Key Auth
             Initialize-PodeWebTableColumn -Key Suppressed
             Initialize-PodeWebTableColumn -Key Action
         ) -ScriptBlock {
             Get-BfdSession | ForEach-Object {
                 [ordered]@{
                     Name = $_.Name; State = $_.State; RemoteState = $_.RemoteState; Remote = $_.Remote; TxMs = $_.TxMs
-                    DetectMult = $_.DetectMult; Sent = $_.Sent; Received = $_.Received; Suppressed = $_.Suppressed
+                    DetectMult = $_.DetectMult; Sent = $_.Sent; Received = $_.Received; Suppressed = $_.Suppressed; Auth = $_.AuthType
                     Action = @(
                         if ($_.State -eq 'Stopped') {
                             New-PodeWebButton -Name 'Resume' -Icon 'play' -DataValue $_.Name -ScriptBlock {
