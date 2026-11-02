@@ -1,11 +1,14 @@
 param([int]$Port = 8085, [string]$Address = 'localhost')
 
-$core = (Resolve-Path (Join-Path $PSScriptRoot '..' 'PowerBGP' 'PowerBGP.psd1')).Path
+# Use the sibling checkout if present, otherwise the installed module (Install-PSResource PowerBGP)
+$sibling = Join-Path $PSScriptRoot '..' 'PowerBGP' 'PowerBGP.psd1'
+$useSibling = Test-Path $sibling
+$core = if ($useSibling) { (Resolve-Path $sibling).Path } else { 'PowerBGP' }
 
 Start-PodeServer {
     Add-PodeEndpoint -Address $Address -Port $Port -Protocol Http
     Import-PodeModule -Name Pode.Web
-    Import-PodeModule -Path $core
+    if ($useSibling) { Import-PodeModule -Path $core } else { Import-PodeModule -Name $core }
 
     Enable-PodeOpenApi -Path '/docs/openapi' -OpenApiVersion '3.0.3' -DisableMinimalDefinitions -NoDefaultResponses
     Add-PodeOAInfo -Title 'PowerBGP API' -Version '0.8.0' -Description 'REST API for the PowerBGP test peers (BGP and BFD). Lab use only: there is no authentication.' -LicenseName 'MIT' -LicenseUrl 'https://opensource.org/license/mit'
