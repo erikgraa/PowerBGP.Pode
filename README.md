@@ -4,7 +4,7 @@ Pode.Web UI and REST API for the [PowerBGP](../PowerBGP) module.
 
 ![PowerBGP Home page showing established BGP peers and BFD sessions](docs/home.png)
 
-Requires Pode 2.12.0 and Pode.Web 0.8.3. `server.ps1` expects the PowerBGP repo cloned next to this one (`../PowerBGP`).
+Requires Pode 2.12.0 and Pode.Web 0.8.3. `server.ps1` loads the PowerBGP repo if it is cloned next to this one (`../PowerBGP`), otherwise the installed module (`Install-PSResource PowerBGP`).
 
 ```powershell
 pwsh ./server.ps1            # http://localhost:8085
